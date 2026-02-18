@@ -1,0 +1,122 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to get user's role from the users collection
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+    
+    // Helper function to check if user is admin
+    function isAdmin() {
+      return getUserRole() == 'admin';
+    }
+
+    // ============ USERS COLLECTION ============
+    // Users can only read/write their own user document
+    // Only admins can read all users
+    match /users/{userId} {
+      allow read: if request.auth.uid == userId || isAdmin();
+      allow create: if request.auth.uid == userId && 
+                       request.resource.data.role in ['admin', 'nurse'];
+      allow update: if request.auth.uid == userId || isAdmin();
+      allow delete: if isAdmin();
+      
+      // Validate user data on create/update
+      allow create, update: if
+        request.resource.data.email is string &&
+        request.resource.data.name is string &&
+        request.resource.data.role is string &&
+        request.resource.data.role in ['admin', 'nurse'] &&
+        request.resource.data.createdAt is timestamp &&
+        request.resource.data.lastLogin is timestamp;
+    }
+
+    // ============ PATIENTS COLLECTION ============
+    // Patients can read/write their own patient document
+    // Admins can read all patient documents
+    // Only admins can create/update/delete patient records
+    match /patients/{patientId} {
+      allow read: if request.auth.uid == patientId || isAdmin();
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+      
+      // Validate patient data on create/update
+      allow create, update: if isAdmin() &&
+        // Basic Info
+        request.resource.data.patientId is string &&
+        request.resource.data.lastUpdated is timestamp &&
+        
+        // Physical Info
+        request.resource.data.gender in [0, 1] &&
+        request.resource.data.age > 0 &&
+        request.resource.data.age <= 150 &&
+        request.resource.data.heightCm > 0 &&
+        request.resource.data.heightCm <= 300 &&
+        request.resource.data.weightKg > 0 &&
+        request.resource.data.weightKg <= 500 &&
+        request.resource.data.waistlineCm > 0 &&
+        request.resource.data.waistlineCm <= 300 &&
+        
+        // Lifestyle
+        request.resource.data.alcoholConsumption >= 0 &&
+        request.resource.data.alcoholConsumption <= 4 &&
+        request.resource.data.isSmoking is bool &&
+        request.resource.data.isPhysicallyInactive is bool &&
+        request.resource.data.isExcessivePhysicalActivity is bool &&
+        
+        // Medical History
+        request.resource.data.hasGeneticPredisposition is bool &&
+        request.resource.data.hasSleepApnea is bool &&
+        request.resource.data.hasHyperlipidaemia is bool &&
+        request.resource.data.hasHyperglycaemia is bool &&
+        request.resource.data.hasImpairedFastingGlycaemia is bool &&
+        request.resource.data.hasHyperthyroidism is bool &&
+        request.resource.data.hasAdrenalGlandHyperfunction is bool &&
+        request.resource.data.hasHeartFailureReducedEF is bool &&
+        request.resource.data.hasHeartFailurePreservedEF is bool &&
+        request.resource.data.hasCoronaryArteryDisease is bool &&
+        request.resource.data.hasChronicKidneyDisease is bool &&
+        request.resource.data.hasCOPDorAsthma is bool &&
+        request.resource.data.hasStrokeHistory is bool &&
+        
+        // Current Conditions & Lab Results
+        request.resource.data.isMetabolicSyndrome is bool &&
+        request.resource.data.hasHighArterialBP is bool &&
+        request.resource.data.triglycerideLevel >= 0 &&
+        request.resource.data.triglycerideLevel <= 1000 &&
+        request.resource.data.hasHighTriglycerides is bool &&
+        request.resource.data.hasLowHDL is bool &&
+        request.resource.data.hasDiabetes is bool &&
+        request.resource.data.hypertensionStage >= 0 &&
+        request.resource.data.hypertensionStage <= 3 &&
+        
+        // Medications & Treatment
+        request.resource.data.isOnAntihypertensiveTreatment is bool &&
+        request.resource.data.antihypertensiveMedication is string &&
+        request.resource.data.otherMedication is string;
+    }
+
+    // ============ AUDIT LOGS COLLECTION ============
+    // Only admins can write to audit logs (append-only pattern)
+    // Only admins can read audit logs
+    // Audit logs are immutable (no updates/deletes)
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() &&
+        request.resource.data.action in ['create', 'update', 'delete'] &&
+        request.resource.data.entityType is string &&
+        request.resource.data.entityId is string &&
+        request.resource.data.userId is string &&
+        request.resource.data.timestamp is timestamp;
+      allow update: if false; // Immutable - no updates allowed
+      allow delete: if false; // Immutable - no deletes allowed
+    }
+
+    // Deny all other access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
