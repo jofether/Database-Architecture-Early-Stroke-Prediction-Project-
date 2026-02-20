@@ -6,6 +6,102 @@ class PatientService {
   final String _patientsCollection = 'patients';
   final String _auditLogsCollection = 'auditLogs';
   final String _usersCollection = 'users';
+  final String _notificationsCollection = 'notifications'; // IoT-IAS-Ecosystem
+  final String _sensorsCollection = 'sensors'; // IoT-IAS
+
+  // ============ CREATE ============
+  /// Creates a new patient record and logs the action to audit trail
+  Future<void> createPatient(Patient patient, String userId) async {
+    try {
+      // Validate patient data before creating
+      _validatePatientData(patient);
+
+      // Create the patient document
+      await _firestore
+          .collection(_patientsCollection)
+          .doc(patient.patientId)
+          .set(patient.toMap());
+
+      // Log to audit trail
+      await _logAuditTrail(
+        action: 'create',
+        entityType: 'patient',
+        entityId: patient.patientId,
+        patientId: patient.patientId,
+        userId: userId,
+        newValue: patient.toMap(),
+      );
+    } catch (e) {
+      throw PatientServiceException('Failed to create patient: $e');
+    }
+  }
+
+  // ============ READ ============
+  /// Gets a single patient by ID
+  Future<Patient?> getPatient(String patientId) async {
+    try {
+      final snapshot =
+          await _firestore.collection(_patientsCollection).doc(patientId).get();
+
+      if (!snapshot.exists) {
+        return null;
+      }
+
+      return Patient.fromMap(snapshot.data() as Map<String, dynamic>);
+    } catch (e) {
+      throw PatientServiceException('Failed to fetch patient: $e');
+    }
+  }
+
+  /// Gets all patients (for admins only - consider pagination)
+  Future<List<Patient>> getAllPatients({int limit = 100}) async {
+    try {
+      final snapshot =
+          await _firestore.collection(_patientsCollection).limit(limit).get();
+
+      return snapshot.docs
+          .map((doc) => Patient.fromMap(doc.data() as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      throw PatientServiceException('Failed to fetch patients: $e');
+    }
+  }
+
+  /// Gets patients by ecosystem (IoT-IAS-Ecosystem multi-tenant support)
+  Future<List<Patient>> getPatientsByEcosystem(String ecosystemId,
+      {int limit = 100}) async {
+    try {
+      final snapshot = await _firestore
+          .collection(_patientsCollection)
+          .where('ecosystemId', isEqualTo: ecosystemId)
+          .limit(limit)
+          .get();
+
+      return snapshot.docs
+          .map((doc) => Patient.fromMap(doc.data() as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      throw PatientServiceException(
+          'Failed to fetch patients for ecosystem: $e');
+    }
+  }
+
+  /// Gets patients with active status only
+  Future<List<Patient>> getActivePatients({int limit = 100}) async {
+    try {
+      final snapshot = await _firestore
+          .collection(_patientsCollection)
+          .where('status', isEqualTo: 'active')
+          .limit(limit)
+          .get();
+
+      return snapshot.docs
+          .map((doc) => Patient.fromMap(doc.data() as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      throw PatientServiceException('Failed to fetch active patients: $e');
+    }
+  }
 
   // ============ CREATE ============
   /// Creates a new patient record and logs the action to audit trail
@@ -91,6 +187,55 @@ class PatientService {
       );
     } catch (e) {
       throw PatientServiceException('Failed to update patient: $e');
+    }
+  }
+
+  /// Updates patient status (active, pending, suspended) - IoT-IAS-Ecosystem
+  Future<void> updatePatientStatus(
+      String patientId, String newStatus, String userId) async {
+    try {
+      if (!['active', 'pending', 'suspended'].contains(newStatus)) {
+        throw PatientValidationException(
+            'Invalid status. Must be active, pending, or suspended');
+      }
+
+      await _firestore
+          .collection(_patientsCollection)
+          .doc(patientId)
+          .update({'status': newStatus});
+
+      await _logAuditTrail(
+        action: 'status_change',
+        entityType: 'patient',
+        entityId: patientId,
+        patientId: patientId,
+        userId: userId,
+        details: 'Status changed to $newStatus',
+      );
+    } catch (e) {
+      throw PatientServiceException('Failed to update patient status: $e');
+    }
+  }
+
+  /// Updates patient permissions in ecosystem - IoT-IAS-Ecosystem
+  Future<void> updatePatientPermissions(
+      String patientId, List<String> newPermissions, String userId) async {
+    try {
+      await _firestore
+          .collection(_patientsCollection)
+          .doc(patientId)
+          .update({'permissionsAllowed': newPermissions});
+
+      await _logAuditTrail(
+        action: 'permissions_change',
+        entityType: 'patient',
+        entityId: patientId,
+        patientId: patientId,
+        userId: userId,
+        details: 'Permissions updated: ${newPermissions.join(", ")}',
+      );
+    } catch (e) {
+      throw PatientServiceException('Failed to update patient permissions: $e');
     }
   }
 
@@ -222,6 +367,212 @@ class PatientService {
           .toList();
     } catch (e) {
       throw PatientServiceException('Failed to search patients by age: $e');
+    }
+  }
+
+  /// Find patients with high risk scores from ML predictions - IoT-IAS
+  Future<List<Patient>> findPatientsByRiskScore(double minRiskScore) async {
+    try {
+      final snapshot = await _firestore
+          .collection(_patientsCollection)
+          .where('predictionData.riskScore',
+              isGreaterThanOrEqualTo: minRiskScore)
+          .get();
+
+      return snapshot.docs
+          .map((doc) => Patient.fromMap(doc.data() as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      throw PatientServiceException(
+          'Failed to search patients by risk score: $e');
+    }
+  }
+
+  // ============ SENSOR DATA (IoT-IAS) ============
+  /// Records PPG sensor data for a patient
+  Future<void> recordSensorData(
+      String patientId, PPGData sensorData, String userId) async {
+    try {
+      // Update patient document with latest sensor data
+      await _firestore
+          .collection(_patientsCollection)
+          .doc(patientId)
+          .update({'sensorData': sensorData.toMap()});
+
+      // Also store in separate sensors collection for time-series queries
+      await _firestore.collection(_sensorsCollection).add({
+        'patientId': patientId,
+        'sensorType': 'PPG',
+        'data': sensorData.toMap(),
+        'recordedAt': FieldValue.serverTimestamp(),
+      });
+
+      await _logAuditTrail(
+        action: 'sensor_data_recorded',
+        entityType: 'sensor',
+        entityId: patientId,
+        patientId: patientId,
+        userId: userId,
+        details: 'PPG - BPM: ${sensorData.avgBPM}, SpO2: ${sensorData.spO2}%',
+      );
+    } catch (e) {
+      throw PatientServiceException('Failed to record sensor data: $e');
+    }
+  }
+
+  /// Gets sensor data history for a patient
+  Future<List<Map<String, dynamic>>> getSensorDataHistory(String patientId,
+      {int limit = 100}) async {
+    try {
+      final snapshot = await _firestore
+          .collection(_sensorsCollection)
+          .where('patientId', isEqualTo: patientId)
+          .orderBy('recordedAt', descending: true)
+          .limit(limit)
+          .get();
+
+      return snapshot.docs.map((doc) => doc.data()).toList();
+    } catch (e) {
+      throw PatientServiceException('Failed to fetch sensor data history: $e');
+    }
+  }
+
+  // ============ ML PREDICTIONS (IoT-IAS) ============
+  /// Updates patient prediction data with ML model results
+  Future<void> updatePredictionData(
+      String patientId, PredictionData predictionData, String userId) async {
+    try {
+      await _firestore
+          .collection(_patientsCollection)
+          .doc(patientId)
+          .update({'predictionData': predictionData.toMap()});
+
+      // Create notification if risk is high (> 70)
+      if (predictionData.riskScore != null && predictionData.riskScore! > 70) {
+        await createNotification(
+          patientId: patientId,
+          notificationType: 'high_risk_alert',
+          title: 'High Risk Alert',
+          content:
+              'Patient has a high health risk score of ${predictionData.riskScore?.toStringAsFixed(1)}%',
+          userId: userId,
+        );
+      }
+
+      await _logAuditTrail(
+        action: 'prediction_updated',
+        entityType: 'prediction',
+        entityId: patientId,
+        patientId: patientId,
+        userId: userId,
+        details:
+            'Risk Score: ${predictionData.riskScore?.toStringAsFixed(1)}% (Model: ${predictionData.modelVersion})',
+      );
+    } catch (e) {
+      throw PatientServiceException('Failed to update prediction data: $e');
+    }
+  }
+
+  /// Gets prediction history for a patient
+  Future<List<Map<String, dynamic>>> getPredictionHistory(String patientId,
+      {int limit = 50}) async {
+    try {
+      final snapshot = await _firestore
+          .collection(_patientsCollection)
+          .doc(patientId)
+          .collection('predictions')
+          .orderBy('predictionTimestamp', descending: true)
+          .limit(limit)
+          .get();
+
+      return snapshot.docs.map((doc) => doc.data()).toList();
+    } catch (e) {
+      throw PatientServiceException('Failed to fetch prediction history: $e');
+    }
+  }
+
+  // ============ NOTIFICATIONS (IoT-IAS-Ecosystem) ============
+  /// Creates a notification for a patient
+  Future<String> createNotification({
+    required String patientId,
+    required String notificationType,
+    required String title,
+    required String content,
+    required String userId,
+    List<String>? buttons,
+  }) async {
+    try {
+      final docRef = await _firestore.collection(_notificationsCollection).add({
+        'patientId': patientId,
+        'notifType': notificationType,
+        'notifTitle': title,
+        'notifContent': content,
+        'notifButtons': buttons ?? [],
+        'createdAt': FieldValue.serverTimestamp(),
+        'isRead': false,
+        'readAt': null,
+      });
+
+      await _logAuditTrail(
+        action: 'notification_created',
+        entityType: 'notification',
+        entityId: docRef.id,
+        patientId: patientId,
+        userId: userId,
+        details: '$notificationType: $title',
+      );
+
+      return docRef.id;
+    } catch (e) {
+      throw PatientServiceException('Failed to create notification: $e');
+    }
+  }
+
+  /// Gets unread notifications for a patient
+  Future<List<Map<String, dynamic>>> getUnreadNotifications(
+      String patientId) async {
+    try {
+      final snapshot = await _firestore
+          .collection(_notificationsCollection)
+          .where('patientId', isEqualTo: patientId)
+          .where('isRead', isEqualTo: false)
+          .orderBy('createdAt', descending: true)
+          .get();
+
+      return snapshot.docs.map((doc) => doc.data()).toList();
+    } catch (e) {
+      throw PatientServiceException('Failed to fetch unread notifications: $e');
+    }
+  }
+
+  /// Marks notification as read
+  Future<void> markNotificationAsRead(String notificationId) async {
+    try {
+      await _firestore
+          .collection(_notificationsCollection)
+          .doc(notificationId)
+          .update({
+        'isRead': true,
+        'readAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      throw PatientServiceException('Failed to mark notification as read: $e');
+    }
+  }
+
+  // ============ PERMISSION CHECKS (IoT-IAS-Ecosystem) ============
+  /// Checks if user has permission to access a patient
+  Future<bool> hasPermissionToAccessPatient(
+      String userId, String patientId, String requiredPermission) async {
+    try {
+      final patient = await getPatient(patientId);
+      if (patient == null) return false;
+
+      // For now, check if user has the required permission
+      // In production, also verify userId matches permissions system
+      return patient.permissionsAllowed?.contains(requiredPermission) ?? false;
+    } catch (e) {
+      return false;
     }
   }
 

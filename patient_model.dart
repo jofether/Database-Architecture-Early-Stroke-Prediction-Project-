@@ -1,9 +1,142 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+// ============ PPG SENSOR DATA (from IoT-IAS) ============
+class PPGData {
+  final String? hardwareId;
+  final int? avgBPM; // Average Beats Per Minute
+  final int? hrv; // Heart Rate Variability
+  final int? spO2; // Oxygen Saturation
+  final DateTime? timestamp;
+
+  PPGData({
+    this.hardwareId,
+    this.avgBPM,
+    this.hrv,
+    this.spO2,
+    this.timestamp,
+  });
+
+  factory PPGData.fromMap(Map<String, dynamic> map) {
+    return PPGData(
+      hardwareId: map['hardwareId'],
+      avgBPM: map['avgBPM'],
+      hrv: map['hrv'],
+      spO2: map['spO2'],
+      timestamp: map['timestamp'] != null
+          ? (map['timestamp'] as Timestamp).toDate()
+          : null,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'hardwareId': hardwareId,
+      'avgBPM': avgBPM,
+      'hrv': hrv,
+      'spO2': spO2,
+      'timestamp': timestamp != null ? Timestamp.fromDate(timestamp!) : null,
+    };
+  }
+}
+
+// ============ ML PREDICTION DATA (from IoT-IAS) ============
+class PredictionData {
+  final String? modelVersion;
+  final double? riskScore; // Overall health risk score (0-100)
+  final DateTime? predictionTimestamp;
+  final String? predictionStatus; // 'pending', 'completed', 'failed'
+
+  PredictionData({
+    this.modelVersion,
+    this.riskScore,
+    this.predictionTimestamp,
+    this.predictionStatus,
+  });
+
+  factory PredictionData.fromMap(Map<String, dynamic> map) {
+    return PredictionData(
+      modelVersion: map['modelVersion'],
+      riskScore: (map['riskScore'] as num?)?.toDouble(),
+      predictionTimestamp: map['predictionTimestamp'] != null
+          ? (map['predictionTimestamp'] as Timestamp).toDate()
+          : null,
+      predictionStatus: map['predictionStatus'],
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'modelVersion': modelVersion,
+      'riskScore': riskScore,
+      'predictionTimestamp': predictionTimestamp != null
+          ? Timestamp.fromDate(predictionTimestamp!)
+          : null,
+      'predictionStatus': predictionStatus,
+    };
+  }
+}
+
+// ============ NOTIFICATION (from IoT-IAS-Ecosystem) ============
+class PatientNotification {
+  final String? notifId;
+  final String? notifType; // 'critical_alert', 'medication_reminder', etc
+  final String? notifTitle;
+  final String? notifContent;
+  final List<String>? notifButtons;
+  final DateTime? createdAt;
+  final bool? isRead;
+  final DateTime? readAt;
+
+  PatientNotification({
+    this.notifId,
+    this.notifType,
+    this.notifTitle,
+    this.notifContent,
+    this.notifButtons,
+    this.createdAt,
+    this.isRead,
+    this.readAt,
+  });
+
+  factory PatientNotification.fromMap(Map<String, dynamic> map) {
+    return PatientNotification(
+      notifId: map['notifId'],
+      notifType: map['notifType'],
+      notifTitle: map['notifTitle'],
+      notifContent: map['notifContent'],
+      notifButtons: List<String>.from(map['notifButtons'] ?? []),
+      createdAt: map['createdAt'] != null
+          ? (map['createdAt'] as Timestamp).toDate()
+          : null,
+      isRead: map['isRead'],
+      readAt:
+          map['readAt'] != null ? (map['readAt'] as Timestamp).toDate() : null,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'notifId': notifId,
+      'notifType': notifType,
+      'notifTitle': notifTitle,
+      'notifContent': notifContent,
+      'notifButtons': notifButtons,
+      'createdAt': createdAt != null ? Timestamp.fromDate(createdAt!) : null,
+      'isRead': isRead,
+      'readAt': readAt != null ? Timestamp.fromDate(readAt!) : null,
+    };
+  }
+}
+
 class Patient {
   // Basic Info
   final String patientId;
   final DateTime lastUpdated;
+
+  // Ecosystem & Organization (from IoT-IAS-Ecosystem)
+  final String? ecosystemId; // Multi-tenant support
+  final String? status; // 'active', 'pending', 'suspended'
+  final List<String>? permissionsAllowed; // User permissions in this ecosystem
 
   // Physical Info
   final int gender; // 0: Male, 1: Female
@@ -47,6 +180,12 @@ class Patient {
   final String antihypertensiveMedication;
   final String otherMedication;
 
+  // Sensor Data (from IoT-IAS)
+  final PPGData? sensorData;
+
+  // ML Prediction Data (from IoT-IAS)
+  final PredictionData? predictionData;
+
   Patient({
     required this.patientId,
     required this.lastUpdated,
@@ -82,6 +221,11 @@ class Patient {
     required this.isOnAntihypertensiveTreatment,
     required this.antihypertensiveMedication,
     required this.otherMedication,
+    this.ecosystemId,
+    this.status,
+    this.permissionsAllowed,
+    this.sensorData,
+    this.predictionData,
   });
 
   // Convert Firebase Map to Dart Object
@@ -123,6 +267,17 @@ class Patient {
           map['isOnAntihypertensiveTreatment'] ?? false,
       antihypertensiveMedication: map['antihypertensiveMedication'] ?? '',
       otherMedication: map['otherMedication'] ?? '',
+      // New fields from IoT-IAS & IoT-IAS-Ecosystem
+      ecosystemId: map['ecosystemId'],
+      status: map['status'] ?? 'active',
+      permissionsAllowed: List<String>.from(map['permissionsAllowed'] ?? []),
+      sensorData: map['sensorData'] != null
+          ? PPGData.fromMap(map['sensorData'] as Map<String, dynamic>)
+          : null,
+      predictionData: map['predictionData'] != null
+          ? PredictionData.fromMap(
+              map['predictionData'] as Map<String, dynamic>)
+          : null,
     );
   }
 
@@ -163,6 +318,12 @@ class Patient {
       'isOnAntihypertensiveTreatment': isOnAntihypertensiveTreatment,
       'antihypertensiveMedication': antihypertensiveMedication,
       'otherMedication': otherMedication,
+      // New fields from IoT-IAS & IoT-IAS-Ecosystem
+      'ecosystemId': ecosystemId,
+      'status': status,
+      'permissionsAllowed': permissionsAllowed,
+      'sensorData': sensorData?.toMap(),
+      'predictionData': predictionData?.toMap(),
     };
   }
 }
